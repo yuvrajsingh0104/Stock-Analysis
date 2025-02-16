@@ -1,44 +1,46 @@
-import sys
-import os
 import streamlit as st
-import numpy as np
+import yfinance as yf
 import pandas as pd
-from tensorflow.keras.models import load_model
+import plotly.express as px
 
-# Manually add 'src' to the Python path to force local imports
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "src")))
+st.set_page_config(page_title="Fixed Close Chart", layout="wide")
+st.title("StockCast")
 
-# Now import from the local data_preprocessing.py in src/
-from data_preprocessing import fetch_live_stock_data, preprocess_data
+# Sidebar input
+ticker = st.sidebar.text_input("Enter Single Ticker (e.g. AAPL):", "AAPL")
+period = st.sidebar.selectbox("Select period:", ["1mo","3mo","6mo","1y","2y","5y"], index=3)
 
-# Load trained LSTM model
-model = load_model("models/lstm_stock_model.h5")
+# Fetch data
+df = yf.download(ticker, period=period)
 
-# Streamlit UI
-st.title("📈 Real-Time Stock Price Prediction Using LSTM")
-
-# User input for stock ticker
-ticker = st.text_input("Enter Stock Ticker (e.g., MSFT, AAPL, TSLA):", "MSFT")
-
-# Fetch latest stock data
-df = fetch_live_stock_data(ticker=ticker)
-
-# Ensure we have enough data for prediction
-if len(df) < 50:
-    st.error("Not enough historical data to make a prediction.")
+if df.empty:
+    st.error("No data returned. Check the ticker or period.")
 else:
-    # Preprocess data
-    X, _, scaler, _ = preprocess_data(df)
+    # If multi-index columns appear, flatten them
+    if isinstance(df.columns, pd.MultiIndex):
+        df.columns = ["_".join(col).strip() for col in df.columns]
 
-    # Predict next day's stock price
-    latest_input = X[-1].reshape(1, X.shape[1], 1)
-    predicted_price = model.predict(latest_input)
-    predicted_price = scaler.inverse_transform(predicted_price.reshape(-1, 1))
+    # Find the column that contains "Close"
+    # Typically named "Close_<TICKER>" if multi-level was flattened,
+    # e.g. "Close_AAPL".
+    close_cols = [col for col in df.columns if "Close" in col]
 
-    # Display results
-    st.subheader("📊 Prediction Results")
-    st.write(f"Predicted Next Day Close Price for **{ticker}**: **${predicted_price[0][0]:.2f}**")
-    
-    # Display recent stock prices
-    st.subheader(f"📅 Latest {len(df)} Days Stock Data for {ticker}")
-    st.dataframe(df.tail(10))  # Show last 10 records
+    if not close_cols:
+        st.error("No 'Close' column found in flattened columns. Check your data.")
+    else:
+        # If you only have one ticker, rename that single "Close_xxx" to "Close"
+        # If you have multiple, you'll need a different approach.
+        if len(close_cols) == 1:
+            df.rename(columns={close_cols[0]: "Close"}, inplace=True)
+        else:
+            # If you have multiple close columns, pick the first or handle as needed
+            st.warning(f"Multiple 'Close' columns found: {close_cols}")
+            df.rename(columns={close_cols[0]: "Close"}, inplace=True)
+
+        # Now, "Close" is guaranteed to exist
+        st.write("Columns:", df.columns.tolist())
+        st.dataframe(df.tail())
+
+        # Plot the line chart
+        fig = px.line(df, x=df.index, y="Close", title=f"{ticker.upper()} Closing Prices")
+        st.plotly_chart(fig, use_container_width=True)
